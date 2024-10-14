@@ -10,7 +10,7 @@ LOAD_DATA = {
 		["Accel"] = Vector3.new(0, 0, 0)
 	}, {
 		["Mass"] = 1,
-		["Pos"] = Vector3.new(200, 200, 200),
+		["Pos"] = Vector3.new(5, 5, 5),
 		["Velo"] = Vector3.new(0, 0, 0),
 		["Accel"] = Vector3.new(0, 0, 0)
 	}, 
@@ -36,7 +36,7 @@ local posdiff = {} -- VALEURS DIFFERENCE DE POSITION
 
 -- CONSTANTES PHYSIQUES
 local limit = 1024
-local g = 6.673e-5
+local g = 6.673e-2
 local dt = 1e-2
 local min_mass = 10
 local max_mass = 100
@@ -271,7 +271,7 @@ function bruteForce(universe)
 		for j = 1, #universe do
 			if as[j] == nil then as[j] = Vector3.new(0, 0, 0) end
 			if i ~= j then
-				local a = forceVect(universe[j], universe[i]:GetAttribute("Pos"), universe[i]:GetAttribute("Mass"))
+				local a = forceVect(universe[i], universe[j]:GetAttribute("Pos"), universe[j]:GetAttribute("Mass"))
 				as[i] = as[i] + a / universe[i]:GetAttribute("Mass")
 			end
 		end
