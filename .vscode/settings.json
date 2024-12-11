@@ -7,5 +7,11 @@
 		"**/.DS_Store": true,
 		"**/*.o": true,
 		"**/*.exe": true,
+	},
+	"files.associations": {
+		"*.ejs": "html",
+		"vector": "c",
+		"xstring": "c",
+		"xutility": "c"
 	}
 }
