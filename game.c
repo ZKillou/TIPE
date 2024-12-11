@@ -3,28 +3,30 @@
 #include "raymath.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <time.h>
 
 #define NB_BAT 1
 
-#define NB_OISEAUX 5
+#define NB_OISEAUX 10
 #define LIMITES 32
 #define SPAWN_LIMITES 5
 
-#define MAX_SPEED 1
-#define NEIGHBOR_RADIUS 2
-#define COHESION_FORCE 0.01
-#define ALIGN_FORCE 0.05
-#define SEPARATION_FORCE 0.01
-#define SEPARATION_RADIUS 1.25
+#define MAX_SPEED 0.25
+#define NEIGHBOR_RADIUS 10
+#define COHESION_FORCE 0.005
+#define ALIGN_FORCE 0.03
+#define SEPARATION_FORCE 0.1
+#define SEPARATION_RADIUS 4
 
-float randomDouble(float min, float max) {
+float randomFloat(float min, float max) {
 	float range = max - min;
 	float random = ((float) rand() / RAND_MAX) * range + min;
 	return random;
 }
 
 Vector3 randomVector3(double min, double max) {
-  return (Vector3){ randomDouble(min, max), randomDouble(min, max), randomDouble(min, max) };
+  return (Vector3){ randomFloat(min, max), randomFloat(min, max), randomFloat(min, max) };
 }
 
 typedef struct oiseau {
@@ -83,12 +85,18 @@ Vector3 separation(oiseau* o, nuee nuee) {
 	return Vector3Scale(res, SEPARATION_FORCE);
 }
 
+void limite_vitesse(oiseau* o) {
+	float v = Vector3Length(o->velo);
+	if(v > MAX_SPEED) o->velo = Vector3Scale(o->velo, MAX_SPEED / v);
+}
+
 void deplacement(oiseau* o, nuee nuee) {
 	Vector3 co = cohesion(o, nuee);
 	Vector3 al = alignement(o, nuee);
 	Vector3 se = separation(o, nuee);
 
 	o->velo = Vector3Add(o->velo, Vector3Add(co, Vector3Add(al, se)));
+	limite_vitesse(o);
 	o->pos = Vector3Add(o->pos, o->velo);
 }
 
@@ -145,8 +153,10 @@ void freeNuee(nuee nuee) {
 }
 
 int main(void) {
-	const int screenWidth = 800;
-	const int screenHeight = 450;
+	srand(time(NULL));
+
+	const int screenWidth = 1920;
+	const int screenHeight = 1080;
 
 	oiseau** t = malloc(sizeof(oiseau*) * NB_OISEAUX);
 
@@ -182,6 +192,10 @@ int main(void) {
 		colors[i] = (Color){ GetRandomValue(20, 255), GetRandomValue(10, 55), 30, 255 };
 	}
 
+	bool pause = true;
+	bool showRayon = false;
+	bool showVitesse = false;
+
 	DisableCursor();
 
 	SetTargetFPS(60);
@@ -189,14 +203,16 @@ int main(void) {
 	while (!WindowShouldClose()) {
 		UpdateCamera(&camera, CAMERA_FREE);
 
-		boids();
+		if(IsKeyPressed(KEY_P)) pause = !pause;
+		if(IsKeyPressed(KEY_R)) showRayon = !showRayon;
+		if(IsKeyPressed(KEY_V)) showVitesse = !showVitesse;
 
-		BeginDrawing();
+		if(!pause) boids();
 
+		BeginDrawing();{
 			ClearBackground(RAYWHITE);
 
-			BeginMode3D(camera);
-
+			BeginMode3D(camera);{
 				DrawLine3D((Vector3){ 0.0f, 0.0f, 0.0f },(Vector3){ 1.0f, 0.0f, 0.0f }, RED);
 				DrawLine3D((Vector3){ 0.0f, 0.0f, 0.0f },(Vector3){ 0.0f, 1.0f, 0.0f }, BLUE);
 				DrawLine3D((Vector3){ 0.0f, 0.0f, 0.0f },(Vector3){ 0.0f, 0.0f, 1.0f }, GREEN);
@@ -212,21 +228,20 @@ int main(void) {
 					DrawCubeWiresV(positions[i], sizes[i], MAROON);
 				}
 
-				afficheNuee(nueePrincipale);
+				// afficheNuee(nueePrincipale);
 				for (int i = 0; i < nueePrincipale.taille; i++) {
 					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.5f, GREEN);
+					if(showRayon) DrawSphereWires(nueePrincipale.oiseaux[i]->pos, NEIGHBOR_RADIUS, 5, 5, MAROON);
+					if(showVitesse) DrawLine3D(nueePrincipale.oiseaux[i]->pos, Vector3Add(nueePrincipale.oiseaux[i]->pos, Vector3Scale(nueePrincipale.oiseaux[i]->velo, 2.f)), RED);
 				}
-
-			EndMode3D();
+			}EndMode3D();
 
 			DrawFPS(1, 1);
-
-		EndDrawing();
+		}EndDrawing();
 	}
 
 	CloseWindow();
 
 	freeNuee(nueePrincipale);
-
 	return 0;
 }
