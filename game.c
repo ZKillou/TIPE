@@ -7,9 +7,9 @@
 #include <time.h>
 #include <math.h>
 
-#define NB_BAT 20
+#define NB_BAT 50
 
-#define NB_OISEAUX 500
+#define NB_OISEAUX 200
 #define LIMITES 128
 #define SPAWN_LIMITES 64
 
@@ -17,21 +17,22 @@
 #define MAX_ACCEL 0.025
 #define AMORTI 0.99
 
-#define NEIGHBOR_RADIUS 10
+#define NEIGHBOR_RADIUS 5
+#define NEIGHBOR_ANGLE 3*PI/2
 #define COHESION_FORCE 0.002
 #define ALIGN_FORCE 0.003
 #define SEPARATION_FORCE 0.005
-#define SEPARATION_RADIUS 4
+#define SEPARATION_RADIUS 10
 
-#define FORCE_SOL 0.3
+#define FORCE_SOL 0.1
 #define FORCE_LIMITES 0.1
 #define LIMITE_PLAFOND 64
 #define FORCE_PLAFOND 5
-#define MARGE_SOL 5
+#define MARGE_SOL 2
 #define MARGE_LIMITES 2
 #define LONGUEUR_CARACTERISTIQUE_LIMITES 50
 #define FORCE_BRUIT 0.08
-#define FORCE_CIBLE 0.005
+#define FORCE_CIBLE 0.001
 #define FORCE_MAX_BATIMENT 0.1
 #define MARGE_BATIMENT 5
 #define LONGUEUR_CARACTERISTIQUE_BATIMENT 20
@@ -89,6 +90,11 @@ oiseau* nouvelOiseau(Vector3 pos, Vector3 velo) {
 	return o;
 }
 
+bool estDansVoisinage(oiseau* o1, oiseau* o2, float rayon, float angle) {
+	return Vector3Distance(o1->pos, o2->pos) < rayon &&
+	Vector3Angle(o1->velo, Vector3Subtract(o2->pos, o1->pos)) <= angle;
+}
+
 Vector3 cohesion(oiseau* o, nuee nuee) {
 	Vector3 res = Vector3Zero();
 
@@ -115,8 +121,7 @@ Vector3 separation(oiseau* o, nuee nuee) {
 	Vector3 res = Vector3Zero();
 
 	for(int i = 0; i < nuee.taille; i++) {
-		float d = Vector3Distance(o->pos, nuee.oiseaux[i]->pos);
-		if(d < SEPARATION_RADIUS)
+		if(estDansVoisinage(o, nuee.oiseaux[i], SEPARATION_RADIUS, NEIGHBOR_ANGLE))
 			res = Vector3Add(res, Vector3Subtract(o->pos, nuee.oiseaux[i]->pos));
 	}
 
@@ -126,7 +131,7 @@ Vector3 separation(oiseau* o, nuee nuee) {
 Vector3 limites(oiseau* o) {
 	Vector3 res = Vector3Zero();
 
-	if(o->pos.y < MARGE_SOL) res = Vector3Add(res, (Vector3){ 0.f, fmin((1 / pow(o->pos.y - MARGE_SOL, 2)), FORCE_SOL), 0.f });
+	if(o->pos.y < MARGE_SOL) res = Vector3Add(res, (Vector3){ 0.f, FORCE_SOL, 0.f });
 	if(o->pos.y > LIMITE_PLAFOND) res = Vector3Add(res, (Vector3){ 0.f, - FORCE_PLAFOND, 0.f });
 
 	if(o->pos.x < - LIMITES + MARGE_LIMITES) res = Vector3Add(res, (Vector3){ FORCE_LIMITES * exp(-fabs(o->pos.x + LIMITES) / LONGUEUR_CARACTERISTIQUE_LIMITES), 0.f, 0.f });
@@ -137,10 +142,10 @@ Vector3 limites(oiseau* o) {
 	return res;
 }
 
-Vector3 mouvementCarte(oiseau* o, Vector3 cible) {
+Vector3 mouvementCarte(oiseau* o, Vector3 cible, Vector3 ev) {
 	return Vector3Add(
 		(Vector3){ randomNoise(), randomNoise(), randomNoise() },
-		cibleActivee ? Vector3Scale(Vector3Subtract(cible, o->pos), FORCE_CIBLE) : Vector3Zero()
+		cibleActivee ? Vector3Scale(Vector3Subtract(cible, o->pos), FORCE_CIBLE * (Vector3Length(ev) > 0.1 ? 0.25f : 1.f)) : Vector3Zero()
 	);
 }
 
@@ -229,11 +234,11 @@ void deplacement(oiseau* o, nuee nuee, Vector3 cible) {
 	Vector3 al = alignement(o, nuee);
 	Vector3 se = separation(o, nuee);
 	Vector3 li = limites(o);
-	Vector3 mv = mouvementCarte(o, cible);
 	Vector3 ev = collision(o);
+	Vector3 mv = mouvementCarte(o, cible, ev);
 	Vector3 ex = explore(o, nuee);
 
-	o->accel = Vector3Add(ex, Vector3Add(ev, Vector3Add(mv, Vector3Add(li, Vector3Add(co, Vector3Add(al, se))))));
+	o->accel = Vector3Add(ev, Vector3Add(ex, Vector3Add(mv, Vector3Add(li, Vector3Add(co, Vector3Add(al, se))))));
 	limite_accel(o);
 	o->velo = Vector3Add(o->velo, o->accel);
 	limite_vitesse(o);
@@ -243,33 +248,23 @@ void deplacement(oiseau* o, nuee nuee, Vector3 cible) {
 nuee calculVoisins(oiseau* o) {
 	int taille = 0;
 
-	for(int i = 0; i < nueePrincipale.taille; i++) {
-		if(nueePrincipale.oiseaux[i]->i != o->i) {
-			float d = Vector3Distance(o->pos, nueePrincipale.oiseaux[i]->pos);
-			if(d < NEIGHBOR_RADIUS)
-				taille++;
-		}
-	}
+	for(int i = 0; i < nueePrincipale.taille; i++)
+		if(nueePrincipale.oiseaux[i]->i != o->i && estDansVoisinage(o, nueePrincipale.oiseaux[i], NEIGHBOR_RADIUS, NEIGHBOR_ANGLE))
+			taille++;
 
 	if(!taille) return (nuee){ NULL, 0 };
 
 	oiseau** tab = malloc(sizeof(oiseau*) * taille);
 
 	int j = 0;
-	for(int i = 0; i < nueePrincipale.taille; i++) {
-		if(nueePrincipale.oiseaux[i]->i != o->i) {
-			float d = Vector3Distance(o->pos, nueePrincipale.oiseaux[i]->pos);
-			if(d < NEIGHBOR_RADIUS) {
-				tab[j] = nueePrincipale.oiseaux[i];
-				j++;
-			}
+	for(int i = 0; i < nueePrincipale.taille; i++){
+		if(nueePrincipale.oiseaux[i]->i != o->i && estDansVoisinage(o, nueePrincipale.oiseaux[i], NEIGHBOR_RADIUS, NEIGHBOR_ANGLE)) {
+			tab[j] = nueePrincipale.oiseaux[i];
+			j++;
 		}
 	}
 
-	nuee res = {
-		.oiseaux = tab,
-		.taille = taille
-	};
+	nuee res = (nuee){ tab, taille };
 
 	return res;
 }
