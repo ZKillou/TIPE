@@ -12,6 +12,7 @@
 		"*.ejs": "html",
 		"vector": "c",
 		"xstring": "c",
-		"xutility": "c"
+		"xutility": "c",
+		"cstdlib": "c"
 	}
 }
