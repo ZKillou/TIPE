@@ -11,31 +11,32 @@
 
 #define NB_OISEAUX 200
 #define LIMITES 128
-#define SPAWN_LIMITES 64
+#define SPAWN_LIMITES 96
 
 #define MAX_SPEED 0.25
 #define MAX_ACCEL 0.025
 #define AMORTI 0.99
 
-#define NEIGHBOR_RADIUS 5
-#define NEIGHBOR_ANGLE 3*PI/2
-#define COHESION_FORCE 0.002
+#define NEIGHBOR_RADIUS 15
+#define NEIGHBOR_ANGLE 3*PI/4
+#define COHESION_FORCE 0.003
+#define COHESION_MAX_FORCE 1
 #define ALIGN_FORCE 0.003
-#define SEPARATION_FORCE 0.005
-#define SEPARATION_RADIUS 10
+#define SEPARATION_FORCE 0.003
+#define SEPARATION_RADIUS 2
 
-#define FORCE_SOL 0.1
+#define FORCE_SOL 1
 #define FORCE_LIMITES 0.1
 #define LIMITE_PLAFOND 64
 #define FORCE_PLAFOND 5
-#define MARGE_SOL 2
+#define MARGE_SOL 1
 #define MARGE_LIMITES 2
 #define LONGUEUR_CARACTERISTIQUE_LIMITES 50
 #define FORCE_BRUIT 0.08
 #define FORCE_CIBLE 0.001
 #define FORCE_MAX_BATIMENT 0.1
-#define MARGE_BATIMENT 5
-#define LONGUEUR_CARACTERISTIQUE_BATIMENT 20
+#define MARGE_BATIMENT 8
+#define LONGUEUR_CARACTERISTIQUE_BATIMENT 50
 #define EXPLORE_FORCE_PETITE_NUEE 0.005
 #define EXPLORE_FORCE_GRANDE_NUEE 0.002
 
@@ -98,12 +99,18 @@ bool estDansVoisinage(oiseau* o1, oiseau* o2, float rayon, float angle) {
 Vector3 cohesion(oiseau* o, nuee nuee) {
 	Vector3 res = Vector3Zero();
 
-	if(nuee.taille == 0) return res;
+	if(nuee.taille == 0)
+		return res;
 	
 	for(int i = 0; i < nuee.taille; i++)
 		res = Vector3Add(res, nuee.oiseaux[i]->pos);
 	
-	return Vector3Scale(Vector3Subtract(Vector3Scale(res, 1/nuee.taille), o->pos), COHESION_FORCE);
+	res = Vector3Scale(Vector3Subtract(Vector3Scale(res, 1/nuee.taille), o->pos), COHESION_FORCE);
+
+	if (Vector3Length(res) > COHESION_MAX_FORCE)
+		res = Vector3Scale(Vector3Normalize(res), COHESION_MAX_FORCE);
+
+	return res;
 }
 
 Vector3 alignement(oiseau* o, nuee nuee) {
@@ -114,7 +121,7 @@ Vector3 alignement(oiseau* o, nuee nuee) {
 	for(int i = 0; i < nuee.taille; i++)
 		res = Vector3Add(res, nuee.oiseaux[i]->velo);
 	
-	return Vector3Scale(Vector3Scale(res, 1/nuee.taille), ALIGN_FORCE);
+	return Vector3Scale(res, ALIGN_FORCE / nuee.taille);
 }
 
 Vector3 separation(oiseau* o, nuee nuee) {
@@ -155,6 +162,10 @@ Vector3 collision(oiseau* o) {
 	for(int i = 0; i < NB_BAT; i++) {
 		Vector3 vec = Vector3Zero();
 
+		float dx = fabs(o->pos.x - batiments[i].position.x) - batiments[i].taille.x / 2;
+		float dy = fabs(o->pos.y - batiments[i].position.y) - batiments[i].taille.y / 2;
+		float dz = fabs(o->pos.z - batiments[i].position.z) - batiments[i].taille.z / 2;
+
 		float gauche = batiments[i].position.x - batiments[i].taille.x / 2;
 		float droite = batiments[i].position.x + batiments[i].taille.x / 2;
 
@@ -163,39 +174,31 @@ Vector3 collision(oiseau* o) {
 		float avant = batiments[i].position.z - batiments[i].taille.z / 2;
 		float arriere = batiments[i].position.z + batiments[i].taille.z / 2;
 
-		if(o->pos.x > gauche - MARGE_BATIMENT && o->pos.x < gauche) {
-			float dist = fabs(o->pos.x - gauche);
-			if(dist < MARGE_BATIMENT) {
+		if(dx < MARGE_BATIMENT && dy < MARGE_BATIMENT && dz < MARGE_BATIMENT) {
+			if(o->pos.x > gauche - MARGE_BATIMENT && o->pos.x < gauche) {
+				float dist = fabs(o->pos.x - gauche);
 				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
 				vec = Vector3Add(vec, (Vector3){ -avoid_force, 0, 0 });
 			}
-		}
-		if(o->pos.x < droite + MARGE_BATIMENT && o->pos.x > droite) {
-			float dist = fabs(o->pos.x - droite);
-			if(dist < MARGE_BATIMENT) {
+			if(o->pos.x < droite + MARGE_BATIMENT && o->pos.x > droite) {
+				float dist = fabs(o->pos.x - droite);
 				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
 				vec = Vector3Add(vec, (Vector3){ avoid_force, 0, 0 });
 			}
-		}
 
-		if(o->pos.y < haut + MARGE_BATIMENT && o->pos.y > haut) {
-			float dist = fabs(o->pos.y - haut);
-			if(dist < MARGE_BATIMENT) {
+			if(o->pos.y < haut + MARGE_BATIMENT && o->pos.y > haut) {
+				float dist = fabs(o->pos.y - haut);
 				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
 				vec = Vector3Add(vec, (Vector3){ 0, avoid_force, 0 });
 			}
-		}
 
-		if(o->pos.z > avant - MARGE_BATIMENT && o->pos.z < avant) {
-			float dist = fabs(o->pos.z - avant);
-			if(dist < MARGE_BATIMENT) {
+			if(o->pos.z > avant - MARGE_BATIMENT && o->pos.z < avant) {
+				float dist = fabs(o->pos.z - avant);
 				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
 				vec = Vector3Add(vec, (Vector3){ 0, 0, -avoid_force });
 			}
-		}
-		if(o->pos.z < arriere + MARGE_BATIMENT && o->pos.z > arriere) {
-			float dist = fabs(o->pos.z - arriere);
-			if(dist < MARGE_BATIMENT) {
+			if(o->pos.z < arriere + MARGE_BATIMENT && o->pos.z > arriere) {
+				float dist = fabs(o->pos.z - arriere);
 				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
 				vec = Vector3Add(vec, (Vector3){ 0, 0, avoid_force });
 			}
@@ -238,7 +241,9 @@ void deplacement(oiseau* o, nuee nuee, Vector3 cible) {
 	Vector3 mv = mouvementCarte(o, cible, ev);
 	Vector3 ex = explore(o, nuee);
 
-	o->accel = Vector3Add(ev, Vector3Add(ex, Vector3Add(mv, Vector3Add(li, Vector3Add(co, Vector3Add(al, se))))));
+	Vector3 sum = Vector3Add(ev, Vector3Add(ex, Vector3Add(mv, Vector3Add(li, Vector3Add(co, Vector3Add(al, se))))));
+
+	o->accel = sum;
 	limite_accel(o);
 	o->velo = Vector3Add(o->velo, o->accel);
 	limite_vitesse(o);
