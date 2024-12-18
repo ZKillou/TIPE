@@ -7,39 +7,61 @@
 #include <time.h>
 #include <math.h>
 
+// Objets dans l'espace 3D
 #define NB_BAT 50
-
 #define NB_OISEAUX 200
+
+// Limites spaciales
 #define LIMITES 128
 #define SPAWN_LIMITES 96
 
+// Limites physiques
 #define MAX_SPEED 0.25
 #define MAX_ACCEL 0.025
+#define MAX_INCLINAISON PI/6
+#define MAX_INCLINAISON_TAN tan(MAX_INCLINAISON)
 #define AMORTI 0.99
 
+// Voisinage
 #define NEIGHBOR_RADIUS 10
 #define NEIGHBOR_ANGLE 3*PI/4
+
+// Cohésion
 #define COHESION_FORCE 0.005
 #define COHESION_MAX_FORCE 0.007
+
+// Alignement
 #define ALIGN_FORCE 0.3
-#define SEPARATION_FORCE 0.08
+
+// Séparation
+#define SEPARATION_FORCE 0.2
 #define SEPARATION_RADIUS 4
 
+// Sol
+#define MARGE_SOL 1
 #define FORCE_SOL 1
+
+// Limites
+#define MARGE_LIMITES 2
 #define FORCE_LIMITES 0.1
+#define LONGUEUR_CARACTERISTIQUE_LIMITES 50
 #define LIMITE_PLAFOND 64
 #define FORCE_PLAFOND 5
-#define MARGE_SOL 1
-#define MARGE_LIMITES 2
-#define LONGUEUR_CARACTERISTIQUE_LIMITES 50
+
+// Collisions
+#define FORCE_MAX_BATIMENT 1
+#define MARGE_BATIMENT 4
+#define LONGUEUR_CARACTERISTIQUE_BATIMENT 50
+
+// Mouvements carte
 #define FORCE_BRUIT 0.04
 #define FORCE_CIBLE 0.04
-#define FORCE_MAX_BATIMENT 1
-#define MARGE_BATIMENT 8
-#define LONGUEUR_CARACTERISTIQUE_BATIMENT 50
+#define FORCE_CIBLE_ORBITE 25
+#define RADIUS_CIBLE 10
 #define EXPLORE_FORCE_PETITE_NUEE 0.005
 #define EXPLORE_FORCE_GRANDE_NUEE 0.002
 
+// Fonctions utiles
 float randomFloat(float min, float max) {
 	float range = max - min;
 	float random = ((float) rand() / RAND_MAX) * range + min;
@@ -58,6 +80,7 @@ Vector3 randomCible(void) {
 	return (Vector3){ (float)GetRandomValue(-LIMITES + 1, LIMITES - 1), (float)GetRandomValue(3, 15), (float)GetRandomValue(-LIMITES + 1, LIMITES - 1) };
 }
 
+// Structures
 typedef struct oiseau {
 	int i;
 	Vector3 pos;
@@ -77,10 +100,12 @@ typedef struct batiment {
 	bool toit;
 } batiment;
 
+// Variables globales
 nuee nueePrincipale;
 batiment batiments[NB_BAT];
 bool cibleActivee = true;
 
+// Corps du code
 oiseau* nouvelOiseau(Vector3 pos, Vector3 velo) {
 	oiseau* o = malloc(sizeof(oiseau));
 
@@ -150,10 +175,22 @@ Vector3 limites(oiseau* o) {
 }
 
 Vector3 mouvementCarte(oiseau* o, Vector3 cible, Vector3 ev) {
-	return Vector3Add(
-		(Vector3){ randomNoise(), randomNoise(), randomNoise() },
-		cibleActivee ? Vector3Scale(Vector3Subtract(cible, o->pos), FORCE_CIBLE * (Vector3Length(ev) > 0.1 ? 0.25f : 1.f)) : Vector3Zero()
-	);
+	Vector3 res = (Vector3){ randomNoise(), randomNoise(), randomNoise() };
+
+	if(cibleActivee) {
+		Vector3 versCible = Vector3Subtract(cible, o->pos);
+		float d = Vector3Length(versCible);
+		if(d > RADIUS_CIBLE)
+			res = Vector3Add(res, Vector3Scale(versCible, FORCE_CIBLE * (Vector3Length(ev) > 0.1 ? 0.25f : 1.f)));
+		else {
+			Vector3 radial = Vector3Normalize(versCible);
+			Vector3 tangentielle = (Vector3){ -radial.z, 0, radial.x };
+
+			res = Vector3Add(res, Vector3Scale(tangentielle, FORCE_CIBLE_ORBITE));
+		}
+	}
+
+	return res;
 }
 
 Vector3 collision(oiseau* o) {
@@ -162,46 +199,19 @@ Vector3 collision(oiseau* o) {
 	for(int i = 0; i < NB_BAT; i++) {
 		Vector3 vec = Vector3Zero();
 
-		float dx = fabs(o->pos.x - batiments[i].position.x) - batiments[i].taille.x / 2;
-		float dy = fabs(o->pos.y - batiments[i].position.y) - batiments[i].taille.y / 2;
-		float dz = fabs(o->pos.z - batiments[i].position.z) - batiments[i].taille.z / 2;
-
-		float gauche = batiments[i].position.x - batiments[i].taille.x / 2;
-		float droite = batiments[i].position.x + batiments[i].taille.x / 2;
-
-		float haut = batiments[i].position.y + batiments[i].taille.y / 2;
-
-		float avant = batiments[i].position.z - batiments[i].taille.z / 2;
-		float arriere = batiments[i].position.z + batiments[i].taille.z / 2;
+		Vector3 diff = Vector3Subtract(o->pos, batiments[i].position);
+		float dx = fabs(diff.x) - batiments[i].taille.x / 2;
+		float dy = fabs(diff.y) - batiments[i].taille.y / 2;
+		float dz = fabs(diff.z) - batiments[i].taille.z / 2;
 
 		if(dx < MARGE_BATIMENT && dy < MARGE_BATIMENT && dz < MARGE_BATIMENT) {
-			if(o->pos.x > gauche - MARGE_BATIMENT && o->pos.x < gauche) {
-				float dist = fabs(o->pos.x - gauche);
-				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
-				vec = Vector3Add(vec, (Vector3){ -avoid_force, 0, 0 });
-			}
-			if(o->pos.x < droite + MARGE_BATIMENT && o->pos.x > droite) {
-				float dist = fabs(o->pos.x - droite);
-				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
-				vec = Vector3Add(vec, (Vector3){ avoid_force, 0, 0 });
-			}
+			Vector3 radial = Vector3Normalize(diff);
+			Vector3 radial_force = Vector3Scale(radial, FORCE_MAX_BATIMENT * exp(-Vector3Length(diff) / LONGUEUR_CARACTERISTIQUE_BATIMENT));
 
-			if(o->pos.y < haut + MARGE_BATIMENT && o->pos.y > haut) {
-				float dist = fabs(o->pos.y - haut);
-				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
-				vec = Vector3Add(vec, (Vector3){ 0, avoid_force, 0 });
-			}
+			Vector3 tangent = (Vector3){ -radial.z, 0, radial.x };
+			Vector3 tangent_force = Vector3Scale(Vector3Normalize(tangent), 0.5f * FORCE_MAX_BATIMENT);
 
-			if(o->pos.z > avant - MARGE_BATIMENT && o->pos.z < avant) {
-				float dist = fabs(o->pos.z - avant);
-				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
-				vec = Vector3Add(vec, (Vector3){ 0, 0, -avoid_force });
-			}
-			if(o->pos.z < arriere + MARGE_BATIMENT && o->pos.z > arriere) {
-				float dist = fabs(o->pos.z - arriere);
-				float avoid_force = FORCE_MAX_BATIMENT * exp(-dist / LONGUEUR_CARACTERISTIQUE_BATIMENT);
-				vec = Vector3Add(vec, (Vector3){ 0, 0, avoid_force });
-			}
+			res = Vector3Add(res, Vector3Add(radial_force, tangent_force));
 		}
 
 		if(Vector3Distance(o->pos, batiments[i].position) / 2 < MARGE_BATIMENT) vec = Vector3Scale(vec, 20.f);
@@ -221,10 +231,17 @@ Vector3 explore(oiseau* o, nuee nuee) {
 	return Vector3Scale((Vector3){ randomNoise(), randomNoise(), randomNoise() }, nuee.taille <= 5 ? EXPLORE_FORCE_PETITE_NUEE : EXPLORE_FORCE_GRANDE_NUEE);
 }
 
-void limite_vitesse(oiseau* o) {
+void limite_vitesse(oiseau* o, bool angle) {
 	float v = Vector3Length(o->velo);
 	if(v > MAX_SPEED) o->velo = Vector3Scale(o->velo, MAX_SPEED / v);
 	o->velo = Vector3Scale(o->velo, AMORTI);
+
+	if(angle) {
+		float rc = sqrt(o->velo.x * o->velo.x + o->velo.z * o->velo.z);
+		float inclinaison = atan2(o->velo.y, rc);
+		if (fabs(inclinaison) > MAX_INCLINAISON)
+			o->velo.y *= MAX_INCLINAISON_TAN / fabs(o->velo.y / rc);
+	}
 }
 
 void limite_accel(oiseau* o) {
@@ -246,7 +263,7 @@ void deplacement(oiseau* o, nuee nuee, Vector3 cible) {
 	o->accel = sum;
 	limite_accel(o);
 	o->velo = Vector3Add(o->velo, o->accel);
-	limite_vitesse(o);
+	limite_vitesse(o, cibleActivee);
 	o->pos = Vector3Add(o->pos, o->velo);
 }
 
@@ -283,6 +300,7 @@ void boids(Vector3 cible) {
 	}
 }
 
+// Autres fonctions
 void afficheNuee(nuee nuee) {
 	for(int i = 0; i < nuee.taille; i++) {
 		oiseau o = *nuee.oiseaux[i];
@@ -295,6 +313,7 @@ void freeNuee(nuee nuee) {
   free(nuee.oiseaux);
 }
 
+// main
 int main(void) {
 	srand(time(NULL));
 
