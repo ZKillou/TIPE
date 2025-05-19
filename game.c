@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include "rcamera.h"
 #include "raymath.h"
+#include "rlgl.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -25,6 +26,8 @@
 // Voisinage
 #define NEIGHBOR_RADIUS 10
 #define NEIGHBOR_ANGLE 3*PI/4
+#define CELL_SIZE NEIGHBOR_RADIUS
+#define GRID_SIZE 8000
 
 // Cohésion
 #define COHESION_FORCE 0.005
@@ -56,10 +59,172 @@
 // Mouvements carte
 #define FORCE_BRUIT 0.04
 #define FORCE_CIBLE 0.04
-#define FORCE_CIBLE_ORBITE 25
+#define FORCE_CIBLE_ORBITE 50
 #define RADIUS_CIBLE 10
+#define FORCE_EVICTION 1.5
+#define RADIUS_EVICTION 20
+#define LONGUEUR_CARACTERISTIQUE_EVICTION 30
 #define EXPLORE_FORCE_PETITE_NUEE 0.005
 #define EXPLORE_FORCE_GRANDE_NUEE 0.002
+
+// Raylib+ (https://github.com/raysan5/raylib/blob/master/examples/text/text_draw_3d.c)
+static void DrawTextCodepoint3D(Font font, int codepoint, Vector3 position, float fontSize, bool backface, Color tint)
+{
+	int index = GetGlyphIndex(font, codepoint);
+	float scale = fontSize/(float)font.baseSize;
+
+	// Character destination rectangle on screen
+	// NOTE: We consider charsPadding on drawing
+	position.x += (float)(font.glyphs[index].offsetX - font.glyphPadding)/(float)font.baseSize*scale;
+	position.z += (float)(font.glyphs[index].offsetY - font.glyphPadding)/(float)font.baseSize*scale;
+
+	// Character source rectangle from font texture atlas
+	// NOTE: We consider chars padding when drawing, it could be required for outline/glow shader effects
+	Rectangle srcRec = { font.recs[index].x - (float)font.glyphPadding, font.recs[index].y - (float)font.glyphPadding,
+											 font.recs[index].width + 2.0f*font.glyphPadding, font.recs[index].height + 2.0f*font.glyphPadding };
+
+	float width = (float)(font.recs[index].width + 2.0f*font.glyphPadding)/(float)font.baseSize*scale;
+	float height = (float)(font.recs[index].height + 2.0f*font.glyphPadding)/(float)font.baseSize*scale;
+
+	if (font.texture.id > 0)
+	{
+		const float x = 0.0f;
+		const float y = 0.0f;
+		const float z = 0.0f;
+
+		// normalized texture coordinates of the glyph inside the font texture (0.0f -> 1.0f)
+		const float tx = srcRec.x/font.texture.width;
+		const float ty = srcRec.y/font.texture.height;
+		const float tw = (srcRec.x+srcRec.width)/font.texture.width;
+		const float th = (srcRec.y+srcRec.height)/font.texture.height;
+
+		rlCheckRenderBatchLimit(4 + 4*backface);
+		rlSetTexture(font.texture.id);
+
+		rlPushMatrix();
+			rlTranslatef(position.x, position.y, position.z);
+
+			rlBegin(RL_QUADS);
+				rlColor4ub(tint.r, tint.g, tint.b, tint.a);
+
+				// Front Face
+				rlNormal3f(0.0f, 1.0f, 0.0f);                                   // Normal Pointing Up
+				rlTexCoord2f(tx, ty); rlVertex3f(x,         y, z);              // Top Left Of The Texture and Quad
+				rlTexCoord2f(tx, th); rlVertex3f(x,         y, z + height);     // Bottom Left Of The Texture and Quad
+				rlTexCoord2f(tw, th); rlVertex3f(x + width, y, z + height);     // Bottom Right Of The Texture and Quad
+				rlTexCoord2f(tw, ty); rlVertex3f(x + width, y, z);              // Top Right Of The Texture and Quad
+
+				if (backface)
+				{
+					// Back Face
+					rlNormal3f(0.0f, -1.0f, 0.0f);                              // Normal Pointing Down
+					rlTexCoord2f(tx, ty); rlVertex3f(x,         y, z);          // Top Right Of The Texture and Quad
+					rlTexCoord2f(tw, ty); rlVertex3f(x + width, y, z);          // Top Left Of The Texture and Quad
+					rlTexCoord2f(tw, th); rlVertex3f(x + width, y, z + height); // Bottom Left Of The Texture and Quad
+					rlTexCoord2f(tx, th); rlVertex3f(x,         y, z + height); // Bottom Right Of The Texture and Quad
+				}
+			rlEnd();
+		rlPopMatrix();
+
+		rlSetTexture(0);
+	}
+}
+
+static void DrawText3D(Font font, const char *text, Vector3 position, float fontSize, float fontSpacing, float lineSpacing, bool backface, Color tint)
+{
+	int length = TextLength(text);          // Total length in bytes of the text, scanned by codepoints in loop
+
+	float textOffsetY = 0.0f;               // Offset between lines (on line break '\n')
+	float textOffsetX = 0.0f;               // Offset X to next character to draw
+
+	float scale = fontSize/(float)font.baseSize;
+
+	for (int i = 0; i < length;)
+	{
+		// Get next codepoint from byte string and glyph index in font
+		int codepointByteCount = 0;
+		int codepoint = GetCodepoint(&text[i], &codepointByteCount);
+		int index = GetGlyphIndex(font, codepoint);
+
+		// NOTE: Normally we exit the decoding sequence as soon as a bad byte is found (and return 0x3f)
+		// but we need to draw all of the bad bytes using the '?' symbol moving one byte
+		if (codepoint == 0x3f) codepointByteCount = 1;
+
+		if (codepoint == '\n')
+		{
+			// NOTE: Fixed line spacing of 1.5 line-height
+			// TODO: Support custom line spacing defined by user
+			textOffsetY += scale + lineSpacing/(float)font.baseSize*scale;
+			textOffsetX = 0.0f;
+		}
+		else
+		{
+			if ((codepoint != ' ') && (codepoint != '\t'))
+			{
+				DrawTextCodepoint3D(font, codepoint, (Vector3){ position.x + textOffsetX, position.y, position.z + textOffsetY }, fontSize, backface, tint);
+			}
+
+			if (font.glyphs[index].advanceX == 0) textOffsetX += (float)(font.recs[index].width + fontSpacing)/(float)font.baseSize*scale;
+			else textOffsetX += (float)(font.glyphs[index].advanceX + fontSpacing)/(float)font.baseSize*scale;
+		}
+
+		i += codepointByteCount;   // Move text bytes counter to next codepoint
+	}
+}
+
+static Vector3 MeasureText3D(Font font, const char* text, float fontSize, float fontSpacing, float lineSpacing)
+{
+	int len = TextLength(text);
+	int tempLen = 0;                // Used to count longer text line num chars
+	int lenCounter = 0;
+
+	float tempTextWidth = 0.0f;     // Used to count longer text line width
+
+	float scale = fontSize/(float)font.baseSize;
+	float textHeight = scale;
+	float textWidth = 0.0f;
+
+	int letter = 0;                 // Current character
+	int index = 0;                  // Index position in sprite font
+
+	for (int i = 0; i < len; i++)
+	{
+		lenCounter++;
+
+		int next = 0;
+		letter = GetCodepoint(&text[i], &next);
+		index = GetGlyphIndex(font, letter);
+
+		// NOTE: normally we exit the decoding sequence as soon as a bad byte is found (and return 0x3f)
+		// but we need to draw all of the bad bytes using the '?' symbol so to not skip any we set next = 1
+		if (letter == 0x3f) next = 1;
+		i += next - 1;
+
+		if (letter != '\n')
+		{
+			if (font.glyphs[index].advanceX != 0) textWidth += (font.glyphs[index].advanceX+fontSpacing)/(float)font.baseSize*scale;
+			else textWidth += (font.recs[index].width + font.glyphs[index].offsetX)/(float)font.baseSize*scale;
+		}
+		else
+		{
+			if (tempTextWidth < textWidth) tempTextWidth = textWidth;
+			lenCounter = 0;
+			textWidth = 0.0f;
+			textHeight += scale + lineSpacing/(float)font.baseSize*scale;
+		}
+
+		if (tempLen < lenCounter) tempLen = lenCounter;
+	}
+
+	if (tempTextWidth < textWidth) tempTextWidth = textWidth;
+
+	Vector3 vec = { 0 };
+	vec.x = tempTextWidth + (float)((tempLen - 1)*fontSpacing/(float)font.baseSize*scale); // Adds chars spacing to measure
+	vec.y = 0.25f;
+	vec.z = textHeight;
+
+	return vec;
+}
 
 // Fonctions utiles
 float randomFloat(float min, float max) {
@@ -80,6 +245,14 @@ Vector3 randomCible(void) {
 	return (Vector3){ (float)GetRandomValue(-LIMITES + 1, LIMITES - 1), (float)GetRandomValue(3, 15), (float)GetRandomValue(-LIMITES + 1, LIMITES - 1) };
 }
 
+float distanceAuPlan(Vector3 p, Vector3 a, Vector3 b, Vector3 c) {
+	Vector3 v1 = (Vector3){b.x - a.x, b.y - a.y, b.z - a.z};
+	Vector3 v2 = (Vector3){c.x - a.x, c.y - a.y, c.z - a.z};
+	Vector3 v3 = (Vector3){p.x - a.x, p.y - a.y, p.z - a.z};
+	Vector3 normal = (Vector3){ v1.y * v2.z - v1.z * v2.y, v1.z * v2.x - v1.x * v2.z, v1.x * v2.y - v1.y * v2.x };
+	return fabs(normal.x*v3.x + normal.y*v3.y + normal.z*v3.z);
+}
+
 // Structures
 typedef struct oiseau {
 	int i;
@@ -93,6 +266,15 @@ typedef struct nuee {
 	int taille;
 } nuee;
 
+typedef struct ensembleNuee {
+	nuee** nuees;
+	int taille;
+} ensembleNuee;
+
+typedef struct pcellule {
+	int x, z;
+} pcellule;
+
 typedef struct batiment {
 	Vector3 position;
 	Vector3 taille;
@@ -100,10 +282,41 @@ typedef struct batiment {
 	bool toit;
 } batiment;
 
+typedef struct face {
+	Vector3 a, b, c;
+} face;
+
+typedef struct faceCollection {
+	face* faces;
+	int taille;
+} faceCollection;
+
 // Variables globales
 nuee nueePrincipale;
 batiment batiments[NB_BAT];
+nuee grille[GRID_SIZE / 2][GRID_SIZE / 2];
+int nbCellules = 0;
 bool cibleActivee = true;
+bool pointFuiteActive = false;
+
+// Fonctions nuée
+void afficheNuee(nuee nuee) {
+	for(int i = 0; i < nuee.taille; i++) {
+		if(nuee.oiseaux[i] != NULL) {
+			oiseau o = *nuee.oiseaux[i];
+			printf("\n === O#%i ===\n  X = %f\n  Y = %f\n  Z = %f\n  Speed = %f\n", o.i, o.pos.x, o.pos.y, o.pos.z, Vector3Length(o.velo));
+		}
+	}
+}
+
+void freeNuee(nuee nuee) {
+  for(int i = 0; i < nuee.taille; i++) free(nuee.oiseaux[i]);
+  free(nuee.oiseaux);
+}
+
+void affichePositionCellule(pcellule pcell) {
+	printf("pcell X = %i, Z = %i", pcell.x, pcell.z);
+}
 
 // Corps du code
 oiseau* nouvelOiseau(Vector3 pos, Vector3 velo) {
@@ -121,16 +334,40 @@ bool estDansVoisinage(oiseau* o1, oiseau* o2, float rayon, float angle) {
 	Vector3Angle(o1->velo, Vector3Subtract(o2->pos, o1->pos)) <= angle;
 }
 
-Vector3 cohesion(oiseau* o, nuee nuee) {
+Vector3 centreDeMasse(nuee nuee) {
 	Vector3 res = Vector3Zero();
 
 	if(nuee.taille == 0)
 		return res;
 	
-	for(int i = 0; i < nuee.taille; i++)
+	for(int i = 0; i < nuee.taille; i++) {
 		res = Vector3Add(res, nuee.oiseaux[i]->pos);
+	}
+
+	res = Vector3Scale(res, 1.f / nuee.taille);
+
+	return res;
+}
+
+Vector3 vitesseLocale(nuee nuee) {
+	Vector3 res = Vector3Zero();
+
+	if(nuee.taille == 0)
+		return res;
 	
-	res = Vector3Scale(Vector3Subtract(Vector3Scale(res, 1/nuee.taille), o->pos), COHESION_FORCE);
+	for(int i = 0; i < nuee.taille; i++) {
+		res = Vector3Add(res, nuee.oiseaux[i]->velo);
+	}
+
+	res = Vector3Scale(res, 1.f / nuee.taille);
+
+	return res;
+}
+
+Vector3 cohesion(oiseau* o, nuee nuee) {
+	Vector3 res = centreDeMasse(nuee);
+	
+	res = Vector3Scale(Vector3Subtract(res, o->pos), COHESION_FORCE);
 
 	if (Vector3Length(res) > COHESION_MAX_FORCE)
 		res = Vector3Scale(Vector3Normalize(res), COHESION_MAX_FORCE);
@@ -139,14 +376,7 @@ Vector3 cohesion(oiseau* o, nuee nuee) {
 }
 
 Vector3 alignement(oiseau* o, nuee nuee) {
-	Vector3 res = Vector3Zero();
-
-	if(nuee.taille == 0) return res;
-	
-	for(int i = 0; i < nuee.taille; i++)
-		res = Vector3Add(res, nuee.oiseaux[i]->velo);
-	
-	return Vector3Scale(res, ALIGN_FORCE / nuee.taille);
+	return Vector3Scale(vitesseLocale(nuee), ALIGN_FORCE);
 }
 
 Vector3 separation(oiseau* o, nuee nuee) {
@@ -174,7 +404,7 @@ Vector3 limites(oiseau* o) {
 	return res;
 }
 
-Vector3 mouvementCarte(oiseau* o, Vector3 cible, Vector3 ev) {
+Vector3 mouvementCarte(oiseau* o, Vector3 cible, Vector3 pointFuite, Vector3 ev) {
 	Vector3 res = (Vector3){ randomNoise(), randomNoise(), randomNoise() };
 
 	if(cibleActivee) {
@@ -187,6 +417,16 @@ Vector3 mouvementCarte(oiseau* o, Vector3 cible, Vector3 ev) {
 			Vector3 tangentielle = (Vector3){ -radial.z, 0, radial.x };
 
 			res = Vector3Add(res, Vector3Scale(tangentielle, FORCE_CIBLE_ORBITE));
+		}
+	}
+
+	if(pointFuiteActive) {
+		Vector3 depuisFuite = Vector3Subtract(o->pos, pointFuite);
+		float d = Vector3Length(depuisFuite);
+
+		if(d < RADIUS_EVICTION && d > 0.1f) {
+			Vector3 radial = Vector3Normalize(depuisFuite);
+			res = Vector3Add(res, Vector3Scale(radial, FORCE_EVICTION * exp(-d / LONGUEUR_CARACTERISTIQUE_EVICTION)));
 		}
 	}
 
@@ -249,13 +489,13 @@ void limite_accel(oiseau* o) {
 	if(a > MAX_ACCEL) o->accel = Vector3Scale(o->accel, MAX_ACCEL / a);
 }
 
-void deplacement(oiseau* o, nuee nuee, Vector3 cible) {
+void deplacement(oiseau* o, nuee nuee, Vector3 cible, Vector3 pointFuite) {
 	Vector3 co = cohesion(o, nuee);
 	Vector3 al = alignement(o, nuee);
 	Vector3 se = separation(o, nuee);
 	Vector3 li = limites(o);
 	Vector3 ev = collision(o);
-	Vector3 mv = mouvementCarte(o, cible, ev);
+	Vector3 mv = mouvementCarte(o, cible, pointFuite, ev);
 	Vector3 ex = explore(o, nuee);
 
 	Vector3 sum = Vector3Add(ev, Vector3Add(ex, Vector3Add(mv, Vector3Add(li, Vector3Add(co, Vector3Add(al, se))))));
@@ -267,50 +507,251 @@ void deplacement(oiseau* o, nuee nuee, Vector3 cible) {
 	o->pos = Vector3Add(o->pos, o->velo);
 }
 
-nuee calculVoisins(oiseau* o) {
+// Voisinage
+pcellule positionCellule(oiseau* o) {
+	return (pcellule){ (int) abs(2 * o->pos.x) / CELL_SIZE + 1, (int) abs(2 * o->pos.z) / CELL_SIZE + 1 };
+}
+
+Vector2 centreCellule(pcellule cellule) {
+	return (Vector2){ (cellule.x - 1) * CELL_SIZE - LIMITES, (cellule.z - 1) * CELL_SIZE - LIMITES };
+}
+
+void updateGrille() {
+	for(int i = 0; i < nbCellules; i++)
+		for(int j = 0; j < nbCellules; j++)
+			grille[i][j].taille = 0;
+	
+	for(int n = 0; n < nueePrincipale.taille; n++) {
+		pcellule pcell = positionCellule(nueePrincipale.oiseaux[n]);
+		grille[pcell.x][pcell.z].oiseaux[grille[pcell.x][pcell.z].taille++] = nueePrincipale.oiseaux[n];
+	}
+}
+
+int tailleVoisin(oiseau* o, nuee cell) {
 	int taille = 0;
 
-	for(int i = 0; i < nueePrincipale.taille; i++)
-		if(nueePrincipale.oiseaux[i]->i != o->i && estDansVoisinage(o, nueePrincipale.oiseaux[i], NEIGHBOR_RADIUS, NEIGHBOR_ANGLE))
+	for(int i = 0; i < cell.taille; i++)
+		if(cell.oiseaux[i]->i != o->i && estDansVoisinage(o, cell.oiseaux[i], NEIGHBOR_RADIUS, NEIGHBOR_ANGLE))
 			taille++;
+	
+	return taille;
+}
+
+void ajouteVoisinNuee(oiseau* o, oiseau** t, nuee cell, int* i) {
+	for(int j = 0; j < cell.taille; j++) {
+		if(cell.oiseaux[j]->i != o->i && estDansVoisinage(o, cell.oiseaux[j], NEIGHBOR_RADIUS, NEIGHBOR_ANGLE)) {
+			t[*i] = cell.oiseaux[j];
+			(*i)++;
+		}
+	}
+}
+
+nuee calculVoisins(oiseau* o) {
+	pcellule pcell = positionCellule(o);
+
+	int taille =
+		tailleVoisin(o, grille[pcell.x + 1][pcell.z - 1]) +
+		tailleVoisin(o, grille[pcell.x + 1][pcell.z]) +
+		tailleVoisin(o, grille[pcell.x + 1][pcell.z + 1]) +
+		tailleVoisin(o, grille[pcell.x][pcell.z - 1]) +
+		tailleVoisin(o, grille[pcell.x][pcell.z]) +
+		tailleVoisin(o, grille[pcell.x][pcell.z + 1]) +
+		tailleVoisin(o, grille[pcell.x - 1][pcell.z - 1]) +
+		tailleVoisin(o, grille[pcell.x - 1][pcell.z]) +
+		tailleVoisin(o, grille[pcell.x - 1][pcell.z + 1]);
 
 	if(!taille) return (nuee){ NULL, 0 };
 
 	oiseau** tab = malloc(sizeof(oiseau*) * taille);
 
-	int j = 0;
-	for(int i = 0; i < nueePrincipale.taille; i++){
-		if(nueePrincipale.oiseaux[i]->i != o->i && estDansVoisinage(o, nueePrincipale.oiseaux[i], NEIGHBOR_RADIUS, NEIGHBOR_ANGLE)) {
-			tab[j] = nueePrincipale.oiseaux[i];
-			j++;
-		}
-	}
+	int i = 0;
+	ajouteVoisinNuee(o, tab, grille[pcell.x + 1][pcell.z - 1], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x + 1][pcell.z], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x + 1][pcell.z + 1], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x][pcell.z - 1], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x][pcell.z], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x][pcell.z + 1], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x - 1][pcell.z - 1], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x - 1][pcell.z], &i);
+	ajouteVoisinNuee(o, tab, grille[pcell.x - 1][pcell.z + 1], &i);
 
 	nuee res = (nuee){ tab, taille };
 
 	return res;
 }
 
-void boids(Vector3 cible) {
+void parcoursProfondeur(oiseau* o, nuee* groupe, bool* visite) {
+	visite[o->i] = true;
+	groupe->oiseaux[groupe->taille++] = o;
+
+	nuee voisins = calculVoisins(o);
+	for(int i = 0; i < voisins.taille; i++) {
+		if(!visite[voisins.oiseaux[i]->i]) {
+			parcoursProfondeur(voisins.oiseaux[i], groupe, visite);
+		}
+	}
+
+	free(voisins.oiseaux);
+}
+
+ensembleNuee composantesConnexes() {
+	ensembleNuee res = { malloc(NB_OISEAUX * sizeof(nuee)), 0 };
+	bool* visite = malloc(NB_OISEAUX * sizeof(bool));
+	for(int i = 0; i < NB_OISEAUX; i++) visite[i] = false;
+
+	for(int i = 0; i < nueePrincipale.taille; i++) {
+		if(!visite[nueePrincipale.oiseaux[i]->i]) {
+			nuee* groupe = malloc(sizeof(nuee*));
+			*groupe = (nuee){ malloc(NB_OISEAUX * sizeof(oiseau*)), 0 };
+			parcoursProfondeur(nueePrincipale.oiseaux[i], groupe, visite);
+			res.nuees[res.taille++] = groupe;
+		}
+	}
+
+	free(visite);
+	return res;
+}
+
+// Statistiques
+float polarisationLocale(nuee nuee) {
+	if(nuee.taille == 0) return 0.f;
+
+	Vector3 sommeVitesses = (Vector3){0.f, 0.f, 0.f};
+
+	for(int i = 0; i < nuee.taille; i++) {
+		sommeVitesses = Vector3Add(sommeVitesses, Vector3Normalize(nuee.oiseaux[i]->velo));
+	}
+
+	return Vector3Length(sommeVitesses) / (float)nuee.taille;
+}
+
+float polarisationLocaleMoyenne() {
+	if(nueePrincipale.taille == 0) return 0.f;
+
+	float res = 0.f;
+
+	for(int i = 0; i < nueePrincipale.taille; i++) {
+		nuee v = calculVoisins(nueePrincipale.oiseaux[i]);
+		res += polarisationLocale(v);
+		free(v.oiseaux);
+	}
+
+	return res / (float)nueePrincipale.taille;
+}
+
+float cohesionLocale(nuee nuee) {
+	Vector3 com = centreDeMasse(nuee);
+
+	float res = 0.f;
+	for(int i = 0; i < nuee.taille; i++) {
+		res += Vector3Distance(com, nuee.oiseaux[i]->pos);
+	}
+
+	return res / nuee.taille;
+}
+
+float dispertionLocale(nuee nuee) {
+	float res = 0.f;
+
+	for (int i = 0; i < nuee.taille; i++) {
+		for (int j = i + 1; j < nuee.taille; j++) {
+			float d = Vector3Distance(nuee.oiseaux[i]->pos, nuee.oiseaux[j]->pos);
+			if (d > res) {
+				res = d;
+			}
+		}
+	}
+
+	return res;
+}
+
+oiseau* trouverOiseauEloigne(nuee nuee, Vector3 a, Vector3 b, Vector3 c) {
+	oiseau* res = NULL;
+	float maxDistance = EPSILON;
+
+	for(int i = 0; i < nuee.taille; i++) {
+		float d = distanceAuPlan(nuee.oiseaux[i]->pos, a, b, c);
+		if(d > maxDistance) {
+			maxDistance = d;
+			res = nuee.oiseaux[i];
+		}
+	}
+
+	return res;
+}
+
+void creerFace(faceCollection hullFaces, Vector3 a, Vector3 b, Vector3 c) {
+	hullFaces.faces[hullFaces.taille++] = (face){a, b, c};
+}
+
+void enveloppeRapide3D(nuee nuee, faceCollection hullFaces, Vector3 a, Vector3 b, Vector3 c) {
+	oiseau* oiseauEloigne = trouverOiseauEloigne(nuee, a, b, c);
+
+	if(oiseauEloigne == NULL) {
+		creerFace(hullFaces, a, b, c);
+		return;
+	}
+
+	// Partitionner les points et continuer la construction récursive
+	enveloppeRapide3D(nuee, hullFaces, oiseauEloigne->pos, a, b);
+	enveloppeRapide3D(nuee, hullFaces, oiseauEloigne->pos, b, c);
+	enveloppeRapide3D(nuee, hullFaces, oiseauEloigne->pos, c, a);
+}
+
+faceCollection calculEnveloppeConvexe(nuee nuee) {
+	faceCollection res = (faceCollection){ malloc(sizeof(face) * 5000 * NB_OISEAUX), 0 };
+
+	int minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
+
+	for(int i = 1; i < nuee.taille; i++) {
+		if(nuee.oiseaux[i]->pos.x < nuee.oiseaux[minX]->pos.x) minX = i;
+		if(nuee.oiseaux[i]->pos.x > nuee.oiseaux[maxX]->pos.x) maxX = i;
+		if(nuee.oiseaux[i]->pos.y < nuee.oiseaux[minY]->pos.y) minY = i;
+		if(nuee.oiseaux[i]->pos.y > nuee.oiseaux[maxY]->pos.y) maxY = i;
+		if(nuee.oiseaux[i]->pos.z < nuee.oiseaux[minZ]->pos.z) minZ = i;
+		if(nuee.oiseaux[i]->pos.z > nuee.oiseaux[maxZ]->pos.z) maxZ = i;
+	}
+
+	enveloppeRapide3D(nuee, res, nuee.oiseaux[minX]->pos, nuee.oiseaux[maxX]->pos, nuee.oiseaux[minY]->pos);
+	enveloppeRapide3D(nuee, res, nuee.oiseaux[minX]->pos, nuee.oiseaux[maxX]->pos, nuee.oiseaux[minZ]->pos);
+	enveloppeRapide3D(nuee, res, nuee.oiseaux[minY]->pos, nuee.oiseaux[maxY]->pos, nuee.oiseaux[minZ]->pos);
+	enveloppeRapide3D(nuee, res, nuee.oiseaux[maxY]->pos, nuee.oiseaux[maxZ]->pos, nuee.oiseaux[minZ]->pos);
+
+	return res;
+}
+
+float calculeVolumeEnveloppe(nuee nuee) {
+	float res = 0.f;
+	Vector3 origin = Vector3Zero();
+
+	if(nuee.taille < 4) return res;
+
+	faceCollection faces = calculEnveloppeConvexe(nuee);
+
+	for(int i = 0; i < faces.taille; i++) {
+		face f = faces.faces[i];
+
+		Vector3 normal = Vector3CrossProduct(
+			(Vector3){f.b.x - f.a.x, f.b.y - f.a.y, f.b.z - f.a.z},
+			(Vector3){f.c.x - f.a.x, f.c.y - f.a.y, f.c.z - f.a.z}
+		);
+
+		res += fabs(Vector3DotProduct(normal, (Vector3){f.a.x - origin.x, f.a.y - origin.y, f.a.z - origin.z})) / 6.0f;
+	}
+
+	free(faces.faces);
+
+	return res;
+}
+
+
+// Fonction simulation
+void boids(Vector3 cible, Vector3 pointFuite) {
 	for(int i = 0; i < nueePrincipale.taille; i++) {
 		nuee voisins = calculVoisins(nueePrincipale.oiseaux[i]);
-		// printf("%i a %i voisins\n", i, voisins.taille);
-		deplacement(nueePrincipale.oiseaux[i], voisins, cible);
+		deplacement(nueePrincipale.oiseaux[i], voisins, cible, pointFuite);
 		free(voisins.oiseaux);
 	}
-}
-
-// Autres fonctions
-void afficheNuee(nuee nuee) {
-	for(int i = 0; i < nuee.taille; i++) {
-		oiseau o = *nuee.oiseaux[i];
-		printf("\n === O#%i ===\n  X = %f\n  Y = %f\n  Z = %f\n  Speed = %f\n", o.i, o.pos.x, o.pos.y, o.pos.z, Vector3Length(o.velo));
-	}
-}
-
-void freeNuee(nuee nuee) {
-  for(int i = 0; i < nuee.taille; i++) free(nuee.oiseaux[i]);
-  free(nuee.oiseaux);
 }
 
 // main
@@ -333,15 +774,24 @@ int main(void) {
 	nueePrincipale.oiseaux = t;
 	nueePrincipale.taille = NB_OISEAUX;
 
+	for(int i = 0; i < 2 * LIMITES / 2 + 3; i++) {
+		for(int j = 0; j < 2 * LIMITES / 2 + 3; j++) {
+			oiseau** oiseaux = malloc(NB_OISEAUX * sizeof(oiseau*));
+			nuee cell = (nuee){ oiseaux, 0 };
+			grille[i][j] = cell;
+		}
+		nbCellules++;
+	}
+
 	InitWindow(screenWidth, screenHeight, "TIPE - Simulateur d'Étourmi");
 	// ToggleBorderlessWindowed();
 	// ToggleFullscreen();
 
 	Camera camera = { 0 };
-	camera.position = (Vector3){ 0.0f, 2.0f, 4.0f };
+	camera.position = (Vector3){ 0.0f, 1.5f * LIMITE_PLAFOND, 4.0f };
 	camera.target = (Vector3){ 0.0f, 2.0f, 0.0f };
 	camera.up = (Vector3){ 0.0f, 1.0f, 0.0f };
-	camera.fovy = 60.0f;
+	camera.fovy = 120.0f;
 	camera.projection = CAMERA_PERSPECTIVE;
 
 	for (int i = 0; i < NB_BAT; i++) {
@@ -357,8 +807,13 @@ int main(void) {
 	bool pause = true;
 	bool showRayon = false;
 	bool showVitesse = false;
+	bool showPolarisation = false;
+	bool showNueesStats = false;
 
 	Vector3 cible = randomCible();
+	Vector3 pointFuite = randomCible();
+
+	Font defaultFont = GetFontDefault();
 
 	DisableCursor();
 
@@ -372,8 +827,15 @@ int main(void) {
 		if(IsKeyPressed(KEY_V)) showVitesse = !showVitesse;
 		if(IsKeyPressed(KEY_C) && !IsKeyDown(KEY_LEFT_SHIFT)) cible = randomCible();
 		if(IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_SHIFT)) cibleActivee = !cibleActivee;
+		if(IsKeyPressed(KEY_F) && !IsKeyDown(KEY_LEFT_SHIFT)) pointFuite = randomCible();
+		if(IsKeyPressed(KEY_F) && IsKeyDown(KEY_LEFT_SHIFT)) pointFuiteActive = !pointFuiteActive;
+		if(IsKeyPressed(KEY_H)) showPolarisation = !showPolarisation;
+		if(IsKeyPressed(KEY_N)) showNueesStats = !showNueesStats;
 
-		if(!pause) boids(cible);
+		if(!pause) {
+			updateGrille();
+			boids(cible, pointFuite);
+		}
 
 		BeginDrawing();{
 			ClearBackground(RAYWHITE);
@@ -395,16 +857,45 @@ int main(void) {
 				}
 
 				if(cibleActivee) DrawCube(cible, 1, 1, 1, WHITE);
+				if(pointFuiteActive) DrawCube(pointFuite, 1, 1, 1, BLACK);
 
 				// afficheNuee(nueePrincipale);
 				for (int i = 0; i < nueePrincipale.taille; i++) {
-					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, GREEN);
+					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, DARKBLUE);
 					if(showRayon) DrawSphereWires(nueePrincipale.oiseaux[i]->pos, NEIGHBOR_RADIUS, 5, 5, MAROON);
 					if(showVitesse) DrawLine3D(nueePrincipale.oiseaux[i]->pos, Vector3Add(nueePrincipale.oiseaux[i]->pos, Vector3Scale(nueePrincipale.oiseaux[i]->velo, 2.f)), RED);
+				}
+
+				if(showNueesStats) {
+					ensembleNuee ensemble = composantesConnexes();
+					for(int i = 0; i < ensemble.taille; i++) {
+						Vector3 com = centreDeMasse(*ensemble.nuees[i]);
+						com.y = LIMITE_PLAFOND + 1;
+
+						// float volume = calculeVolumeEnveloppe(*ensemble.nuees[i]);
+
+						const char* text = TextFormat(
+							"Taille %i O\nPolarisation %f %%\nCohésion %f m\nDispertion %f m\nVolume %f m3\nDensité %f O/m3\nVitesse %f m/s",
+							ensemble.nuees[i]->taille,
+							polarisationLocale(*ensemble.nuees[i]) * 100.f,
+							cohesionLocale(*ensemble.nuees[i]),
+							dispertionLocale(*ensemble.nuees[i]),
+							0, 0,
+							// volume,
+							// (float) ensemble.nuees[i]->taille / volume,
+							Vector3Length(vitesseLocale(*ensemble.nuees[i]))
+						);
+
+						Vector3 mes = MeasureText3D(defaultFont, text, 24, 2, 2);
+						mes.y = 0;
+
+						DrawText3D(defaultFont, text, Vector3Subtract(com, Vector3Scale(mes, 0.5f)), 24, 2, 2, true, BLACK);
+					}
 				}
 			}EndMode3D();
 
 			DrawFPS(1, 1);
+			if(showPolarisation) DrawText(TextFormat("Polarisation %f", polarisationLocaleMoyenne()), 1, 21, 20, BLACK);
 		}EndDrawing();
 	}
 
