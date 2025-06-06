@@ -61,9 +61,9 @@
 #define FORCE_CIBLE 0.04
 #define FORCE_CIBLE_ORBITE 50
 #define RADIUS_CIBLE 10
-#define FORCE_EVICTION 1.5
+#define FORCE_EVICTION 5
 #define RADIUS_EVICTION 20
-#define LONGUEUR_CARACTERISTIQUE_EVICTION 30
+#define LONGUEUR_CARACTERISTIQUE_EVICTION 40
 #define EXPLORE_FORCE_PETITE_NUEE 0.005
 #define EXPLORE_FORCE_GRANDE_NUEE 0.002
 
@@ -297,6 +297,7 @@ batiment batiments[NB_BAT];
 nuee grille[GRID_SIZE / 2][GRID_SIZE / 2];
 int nbCellules = 0;
 bool cibleActivee = true;
+bool cibleUniqueActivee = false;
 bool pointFuiteActive = false;
 
 // Fonctions nuée
@@ -533,7 +534,7 @@ int tailleVoisin(oiseau* o, nuee cell) {
 	for(int i = 0; i < cell.taille; i++)
 		if(cell.oiseaux[i]->i != o->i && estDansVoisinage(o, cell.oiseaux[i], NEIGHBOR_RADIUS, NEIGHBOR_ANGLE))
 			taille++;
-	
+
 	return taille;
 }
 
@@ -810,6 +811,7 @@ int main(void) {
 	bool showPolarisation = false;
 	bool showNueesStats = false;
 
+	int oiseauCible = 0;
 	Vector3 cible = randomCible();
 	Vector3 pointFuite = randomCible();
 
@@ -825,10 +827,14 @@ int main(void) {
 		if(IsKeyPressed(KEY_P)) pause = !pause;
 		if(IsKeyPressed(KEY_R)) showRayon = !showRayon;
 		if(IsKeyPressed(KEY_V)) showVitesse = !showVitesse;
-		if(IsKeyPressed(KEY_C) && !IsKeyDown(KEY_LEFT_SHIFT)) cible = randomCible();
-		if(IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_SHIFT)) cibleActivee = !cibleActivee;
-		if(IsKeyPressed(KEY_F) && !IsKeyDown(KEY_LEFT_SHIFT)) pointFuite = randomCible();
-		if(IsKeyPressed(KEY_F) && IsKeyDown(KEY_LEFT_SHIFT)) pointFuiteActive = !pointFuiteActive;
+		if(IsKeyPressed(KEY_C) && !IsKeyDown(KEY_LEFT_SHIFT) && !IsKeyDown(KEY_T)) cible = randomCible();
+		if(IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_SHIFT) && !IsKeyDown(KEY_T)) cibleActivee = !cibleActivee;
+		if(IsKeyPressed(KEY_F) && !IsKeyDown(KEY_LEFT_SHIFT)) {
+			cibleActivee = false;
+			pointFuite = cible;
+			pointFuiteActive = true;
+		}
+		if(IsKeyPressed(KEY_F) && IsKeyDown(KEY_LEFT_SHIFT)) pointFuiteActive = false;
 		if(IsKeyPressed(KEY_H)) showPolarisation = !showPolarisation;
 		if(IsKeyPressed(KEY_N)) showNueesStats = !showNueesStats;
 
