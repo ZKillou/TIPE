@@ -16,7 +16,7 @@
 #define LIMITES 128
 
 // Apparition des oiseaux
-#define SPAWN_LIMITES 16
+#define SPAWN_LIMITES 32
 #define SPAWN_LIMITES_CHAOS 96
 #define SPAWN_CHAOS 0
 
@@ -38,7 +38,7 @@
 #define COHESION_MAX_FORCE 0.007
 
 // Alignement
-#define ALIGN_FORCE 0.3
+#define ALIGN_FORCE 0.5
 
 // Séparation
 #define SEPARATION_FORCE 0.2
@@ -65,6 +65,7 @@
 #define FORCE_CIBLE 0.04
 #define FORCE_CIBLE_ORBITE 50
 #define RADIUS_CIBLE 10
+#define VUE_CIBLE 4
 #define CIBLE_AWARE 20
 #define FORCE_EVICTION 5
 #define RADIUS_EVICTION 20
@@ -429,7 +430,7 @@ Vector3 mouvementCarte(oiseau* o, Vector3 cible, Vector3 pointFuite, Vector3 ev)
 			Vector3 tangentielle = (Vector3){ -radial.z, 0, radial.x };
 
 			res = Vector3Add(res, Vector3Scale(tangentielle, FORCE_CIBLE_ORBITE));
-		} else if((d > RADIUS_CIBLE && cibleAware[o->i]) || d <= 2 * RADIUS_CIBLE)
+		} else if((d > RADIUS_CIBLE && cibleAware[o->i]) || d <= VUE_CIBLE * RADIUS_CIBLE)
 			res = Vector3Add(res, Vector3Scale(versCible, FORCE_CIBLE * (Vector3Length(ev) > 0.1 ? 0.25f : 1.f))); 
 	}
 
@@ -886,7 +887,7 @@ int main(void) {
 
 				// afficheNuee(nueePrincipale);
 				for (int i = 0; i < nueePrincipale.taille; i++) {
-					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, cibleAware[i] ? LIME : DARKBLUE);
+					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, cibleAware[i] && cibleActivee ? LIME : DARKBLUE);
 					if(showRayon) DrawSphereWires(nueePrincipale.oiseaux[i]->pos, NEIGHBOR_RADIUS, 5, 5, MAROON);
 					if(showVitesse) DrawLine3D(nueePrincipale.oiseaux[i]->pos, Vector3Add(nueePrincipale.oiseaux[i]->pos, Vector3Scale(nueePrincipale.oiseaux[i]->velo, 2.f)), RED);
 				}
