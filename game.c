@@ -14,7 +14,11 @@
 
 // Limites spaciales
 #define LIMITES 128
-#define SPAWN_LIMITES 96
+
+// Apparition des oiseaux
+#define SPAWN_LIMITES 16
+#define SPAWN_LIMITES_CHAOS 96
+#define SPAWN_CHAOS 0
 
 // Limites physiques
 #define MAX_SPEED 0.25
@@ -61,6 +65,7 @@
 #define FORCE_CIBLE 0.04
 #define FORCE_CIBLE_ORBITE 50
 #define RADIUS_CIBLE 10
+#define CIBLE_AWARE 20
 #define FORCE_EVICTION 5
 #define RADIUS_EVICTION 20
 #define LONGUEUR_CARACTERISTIQUE_EVICTION 40
@@ -297,7 +302,7 @@ batiment batiments[NB_BAT];
 nuee grille[GRID_SIZE / 2][GRID_SIZE / 2];
 int nbCellules = 0;
 bool cibleActivee = true;
-bool cibleUniqueActivee = false;
+bool cibleAware[NB_OISEAUX];
 bool pointFuiteActive = false;
 
 // Fonctions nuée
@@ -320,16 +325,6 @@ void affichePositionCellule(pcellule pcell) {
 }
 
 // Corps du code
-oiseau* nouvelOiseau(Vector3 pos, Vector3 velo) {
-	oiseau* o = malloc(sizeof(oiseau));
-
-	o->pos = pos;
-	o->velo = velo;
-	o->accel = Vector3Zero();
-	
-	return o;
-}
-
 bool estDansVoisinage(oiseau* o1, oiseau* o2, float rayon, float angle) {
 	return Vector3Distance(o1->pos, o2->pos) < rayon &&
 	Vector3Angle(o1->velo, Vector3Subtract(o2->pos, o1->pos)) <= angle;
@@ -405,20 +400,37 @@ Vector3 limites(oiseau* o) {
 	return res;
 }
 
+void shuffleCibleAware() {
+	for(int i = 0; i < NB_OISEAUX; i++) {
+		int j = rand() % NB_OISEAUX;
+		int tempVal = cibleAware[i];
+		cibleAware[i] = cibleAware[j];
+		cibleAware[j] = tempVal;
+	}
+}
+
+void initCibleAware() {
+	for(int i = 0; i < NB_OISEAUX; i++) {
+		if(i < CIBLE_AWARE) cibleAware[i] = true;
+		else cibleAware[i] = false;
+	}
+
+	shuffleCibleAware();
+}
+
 Vector3 mouvementCarte(oiseau* o, Vector3 cible, Vector3 pointFuite, Vector3 ev) {
 	Vector3 res = (Vector3){ randomNoise(), randomNoise(), randomNoise() };
 
 	if(cibleActivee) {
 		Vector3 versCible = Vector3Subtract(cible, o->pos);
 		float d = Vector3Length(versCible);
-		if(d > RADIUS_CIBLE)
-			res = Vector3Add(res, Vector3Scale(versCible, FORCE_CIBLE * (Vector3Length(ev) > 0.1 ? 0.25f : 1.f)));
-		else {
+		if(d <= RADIUS_CIBLE) {
 			Vector3 radial = Vector3Normalize(versCible);
 			Vector3 tangentielle = (Vector3){ -radial.z, 0, radial.x };
 
 			res = Vector3Add(res, Vector3Scale(tangentielle, FORCE_CIBLE_ORBITE));
-		}
+		} else if((d > RADIUS_CIBLE && cibleAware[o->i]) || d <= 2 * RADIUS_CIBLE)
+			res = Vector3Add(res, Vector3Scale(versCible, FORCE_CIBLE * (Vector3Length(ev) > 0.1 ? 0.25f : 1.f))); 
 	}
 
 	if(pointFuiteActive) {
@@ -764,11 +776,16 @@ int main(void) {
 
 	oiseau** t = malloc(sizeof(oiseau*) * NB_OISEAUX);
 
+	Vector3 vitesseSansChaos = randomVector3(-MAX_SPEED / 2.f, MAX_SPEED / 2.f);
 	for(int i = 0; i < NB_OISEAUX; i++) {
 		oiseau* o = malloc(sizeof(oiseau));
 		o->i = i;
-		o->pos = (Vector3){ (float)GetRandomValue(-SPAWN_LIMITES, SPAWN_LIMITES), 22.0f, (float)GetRandomValue(-SPAWN_LIMITES, SPAWN_LIMITES) };
-		o->velo = randomVector3(-MAX_SPEED / 2.f, MAX_SPEED / 2.f);
+		o->pos = SPAWN_CHAOS == 0 ?
+			(Vector3){ (float)GetRandomValue(-SPAWN_LIMITES, SPAWN_LIMITES), 22.0f, (float)GetRandomValue(-SPAWN_LIMITES, SPAWN_LIMITES) } :
+			(Vector3){ (float)GetRandomValue(-SPAWN_LIMITES_CHAOS, SPAWN_LIMITES_CHAOS), 22.0f, (float)GetRandomValue(-SPAWN_LIMITES_CHAOS, SPAWN_LIMITES_CHAOS) };
+		o->velo = SPAWN_CHAOS == 0 ?
+			vitesseSansChaos :
+			randomVector3(-MAX_SPEED / 2.f, MAX_SPEED / 2.f);
 		t[i] = o;
 	}
 
@@ -811,9 +828,10 @@ int main(void) {
 	bool showPolarisation = false;
 	bool showNueesStats = false;
 
-	int oiseauCible = 0;
 	Vector3 cible = randomCible();
 	Vector3 pointFuite = randomCible();
+	initCibleAware();
+	updateGrille();
 
 	Font defaultFont = GetFontDefault();
 
@@ -827,8 +845,8 @@ int main(void) {
 		if(IsKeyPressed(KEY_P)) pause = !pause;
 		if(IsKeyPressed(KEY_R)) showRayon = !showRayon;
 		if(IsKeyPressed(KEY_V)) showVitesse = !showVitesse;
-		if(IsKeyPressed(KEY_C) && !IsKeyDown(KEY_LEFT_SHIFT) && !IsKeyDown(KEY_T)) cible = randomCible();
-		if(IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_SHIFT) && !IsKeyDown(KEY_T)) cibleActivee = !cibleActivee;
+		if(IsKeyPressed(KEY_C) && !IsKeyDown(KEY_LEFT_SHIFT)) cible = randomCible();
+		if(IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_SHIFT)) cibleActivee = !cibleActivee;
 		if(IsKeyPressed(KEY_F) && !IsKeyDown(KEY_LEFT_SHIFT)) {
 			cibleActivee = false;
 			pointFuite = cible;
@@ -837,6 +855,7 @@ int main(void) {
 		if(IsKeyPressed(KEY_F) && IsKeyDown(KEY_LEFT_SHIFT)) pointFuiteActive = false;
 		if(IsKeyPressed(KEY_H)) showPolarisation = !showPolarisation;
 		if(IsKeyPressed(KEY_N)) showNueesStats = !showNueesStats;
+		if(IsKeyPressed(KEY_T)) shuffleCibleAware();
 
 		if(!pause) {
 			updateGrille();
@@ -867,7 +886,7 @@ int main(void) {
 
 				// afficheNuee(nueePrincipale);
 				for (int i = 0; i < nueePrincipale.taille; i++) {
-					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, DARKBLUE);
+					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, cibleAware[i] ? LIME : DARKBLUE);
 					if(showRayon) DrawSphereWires(nueePrincipale.oiseaux[i]->pos, NEIGHBOR_RADIUS, 5, 5, MAROON);
 					if(showVitesse) DrawLine3D(nueePrincipale.oiseaux[i]->pos, Vector3Add(nueePrincipale.oiseaux[i]->pos, Vector3Scale(nueePrincipale.oiseaux[i]->velo, 2.f)), RED);
 				}
