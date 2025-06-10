@@ -11,7 +11,7 @@
 // Objets dans l'espace 3D
 #define NB_BAT 50
 #define NB_OISEAUX 200
-#define CIBLE_AWARE 10
+#define CIBLE_AWARE 25
 
 // Limites spaciales
 #define LIMITES 128
@@ -19,7 +19,7 @@
 // Apparition des oiseaux
 #define SPAWN_LIMITES 32
 #define SPAWN_LIMITES_CHAOS 96
-#define SPAWN_CHAOS 0
+#define SPAWN_CHAOS 1
 
 // Limites physiques
 #define MAX_SPEED 0.25
@@ -62,7 +62,7 @@
 #define LONGUEUR_CARACTERISTIQUE_BATIMENT 50
 
 // Mouvements carte
-#define FORCE_BRUIT 0
+#define FORCE_BRUIT 0.04
 #define FORCE_CIBLE 0.04
 #define FORCE_CIBLE_ORBITE 50
 #define RADIUS_CIBLE 10
