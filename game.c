@@ -251,14 +251,6 @@ Vector3 randomCible(void) {
 	return (Vector3){ (float)GetRandomValue(-LIMITES + 1, LIMITES - 1), (float)GetRandomValue(3, 15), (float)GetRandomValue(-LIMITES + 1, LIMITES - 1) };
 }
 
-float distanceAuPlan(Vector3 p, Vector3 a, Vector3 b, Vector3 c) {
-	Vector3 v1 = (Vector3){b.x - a.x, b.y - a.y, b.z - a.z};
-	Vector3 v2 = (Vector3){c.x - a.x, c.y - a.y, c.z - a.z};
-	Vector3 v3 = (Vector3){p.x - a.x, p.y - a.y, p.z - a.z};
-	Vector3 normal = (Vector3){ v1.y * v2.z - v1.z * v2.y, v1.z * v2.x - v1.x * v2.z, v1.x * v2.y - v1.y * v2.x };
-	return fabs(normal.x*v3.x + normal.y*v3.y + normal.z*v3.z);
-}
-
 // Structures
 typedef struct oiseau {
 	int i;
@@ -287,15 +279,6 @@ typedef struct batiment {
 	Color couleur;
 	bool toit;
 } batiment;
-
-typedef struct face {
-	Vector3 a, b, c;
-} face;
-
-typedef struct faceCollection {
-	face* faces;
-	int taille;
-} faceCollection;
 
 // Variables globales
 nuee nueePrincipale;
@@ -679,86 +662,6 @@ float dispertionLocale(nuee nuee) {
 	return res;
 }
 
-oiseau* trouverOiseauEloigne(nuee nuee, Vector3 a, Vector3 b, Vector3 c) {
-	oiseau* res = NULL;
-	float maxDistance = EPSILON;
-
-	for(int i = 0; i < nuee.taille; i++) {
-		float d = distanceAuPlan(nuee.oiseaux[i]->pos, a, b, c);
-		if(d > maxDistance) {
-			maxDistance = d;
-			res = nuee.oiseaux[i];
-		}
-	}
-
-	return res;
-}
-
-void creerFace(faceCollection hullFaces, Vector3 a, Vector3 b, Vector3 c) {
-	hullFaces.faces[hullFaces.taille++] = (face){a, b, c};
-}
-
-void enveloppeRapide3D(nuee nuee, faceCollection hullFaces, Vector3 a, Vector3 b, Vector3 c) {
-	oiseau* oiseauEloigne = trouverOiseauEloigne(nuee, a, b, c);
-
-	if(oiseauEloigne == NULL) {
-		creerFace(hullFaces, a, b, c);
-		return;
-	}
-
-	// Partitionner les points et continuer la construction récursive
-	enveloppeRapide3D(nuee, hullFaces, oiseauEloigne->pos, a, b);
-	enveloppeRapide3D(nuee, hullFaces, oiseauEloigne->pos, b, c);
-	enveloppeRapide3D(nuee, hullFaces, oiseauEloigne->pos, c, a);
-}
-
-faceCollection calculEnveloppeConvexe(nuee nuee) {
-	faceCollection res = (faceCollection){ malloc(sizeof(face) * 5000 * NB_OISEAUX), 0 };
-
-	int minX = 0, maxX = 0, minY = 0, maxY = 0, minZ = 0, maxZ = 0;
-
-	for(int i = 1; i < nuee.taille; i++) {
-		if(nuee.oiseaux[i]->pos.x < nuee.oiseaux[minX]->pos.x) minX = i;
-		if(nuee.oiseaux[i]->pos.x > nuee.oiseaux[maxX]->pos.x) maxX = i;
-		if(nuee.oiseaux[i]->pos.y < nuee.oiseaux[minY]->pos.y) minY = i;
-		if(nuee.oiseaux[i]->pos.y > nuee.oiseaux[maxY]->pos.y) maxY = i;
-		if(nuee.oiseaux[i]->pos.z < nuee.oiseaux[minZ]->pos.z) minZ = i;
-		if(nuee.oiseaux[i]->pos.z > nuee.oiseaux[maxZ]->pos.z) maxZ = i;
-	}
-
-	enveloppeRapide3D(nuee, res, nuee.oiseaux[minX]->pos, nuee.oiseaux[maxX]->pos, nuee.oiseaux[minY]->pos);
-	enveloppeRapide3D(nuee, res, nuee.oiseaux[minX]->pos, nuee.oiseaux[maxX]->pos, nuee.oiseaux[minZ]->pos);
-	enveloppeRapide3D(nuee, res, nuee.oiseaux[minY]->pos, nuee.oiseaux[maxY]->pos, nuee.oiseaux[minZ]->pos);
-	enveloppeRapide3D(nuee, res, nuee.oiseaux[maxY]->pos, nuee.oiseaux[maxZ]->pos, nuee.oiseaux[minZ]->pos);
-
-	return res;
-}
-
-float calculeVolumeEnveloppe(nuee nuee) {
-	float res = 0.f;
-	Vector3 origin = Vector3Zero();
-
-	if(nuee.taille < 4) return res;
-
-	faceCollection faces = calculEnveloppeConvexe(nuee);
-
-	for(int i = 0; i < faces.taille; i++) {
-		face f = faces.faces[i];
-
-		Vector3 normal = Vector3CrossProduct(
-			(Vector3){f.b.x - f.a.x, f.b.y - f.a.y, f.b.z - f.a.z},
-			(Vector3){f.c.x - f.a.x, f.c.y - f.a.y, f.c.z - f.a.z}
-		);
-
-		res += fabs(Vector3DotProduct(normal, (Vector3){f.a.x - origin.x, f.a.y - origin.y, f.a.z - origin.z})) / 6.0f;
-	}
-
-	free(faces.faces);
-
-	return res;
-}
-
-
 // Fonction simulation
 void boids(Vector3 cible, Vector3 pointFuite) {
 	for(int i = 0; i < nueePrincipale.taille; i++) {
@@ -803,8 +706,6 @@ int main(void) {
 	}
 
 	InitWindow(screenWidth, screenHeight, "TIPE - Simulateur d'Étourmi");
-	// ToggleBorderlessWindowed();
-	// ToggleFullscreen();
 
 	Camera camera = { 0 };
 	camera.position = (Vector3){ 0.0f, 1.5f * LIMITE_PLAFOND, 4.0f };
@@ -885,7 +786,6 @@ int main(void) {
 				if(cibleActivee) DrawCube(cible, 1, 1, 1, WHITE);
 				if(pointFuiteActive) DrawCube(pointFuite, 1, 1, 1, BLACK);
 
-				// afficheNuee(nueePrincipale);
 				for (int i = 0; i < nueePrincipale.taille; i++) {
 					DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, cibleAware[i] && cibleActivee ? LIME : DARKBLUE);
 					if(showRayon) DrawSphereWires(nueePrincipale.oiseaux[i]->pos, NEIGHBOR_RADIUS, 5, 5, MAROON);
@@ -898,17 +798,12 @@ int main(void) {
 						Vector3 com = centreDeMasse(*ensemble.nuees[i]);
 						com.y = LIMITE_PLAFOND + 1;
 
-						// float volume = calculeVolumeEnveloppe(*ensemble.nuees[i]);
-
 						const char* text = TextFormat(
-							"Taille %i O\nPolarisation %f %%\nCohésion %f m\nDispertion %f m\nVolume %f m3\nDensité %f O/m3\nVitesse %f m/s",
+							"Taille %i O\nPolarisation %f %%\nCohésion %f m\nDispertion %f m\nVitesse %f m/s",
 							ensemble.nuees[i]->taille,
 							polarisationLocale(*ensemble.nuees[i]) * 100.f,
 							cohesionLocale(*ensemble.nuees[i]),
 							dispertionLocale(*ensemble.nuees[i]),
-							0, 0,
-							// volume,
-							// (float) ensemble.nuees[i]->taille / volume,
 							Vector3Length(vitesseLocale(*ensemble.nuees[i]))
 						);
 
