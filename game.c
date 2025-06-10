@@ -11,6 +11,7 @@
 // Objets dans l'espace 3D
 #define NB_BAT 50
 #define NB_OISEAUX 200
+#define CIBLE_AWARE 10
 
 // Limites spaciales
 #define LIMITES 128
@@ -61,12 +62,11 @@
 #define LONGUEUR_CARACTERISTIQUE_BATIMENT 50
 
 // Mouvements carte
-#define FORCE_BRUIT 0.04
+#define FORCE_BRUIT 0
 #define FORCE_CIBLE 0.04
 #define FORCE_CIBLE_ORBITE 50
 #define RADIUS_CIBLE 10
 #define VUE_CIBLE 4
-#define CIBLE_AWARE 20
 #define FORCE_EVICTION 5
 #define RADIUS_EVICTION 20
 #define LONGUEUR_CARACTERISTIQUE_EVICTION 40
@@ -284,6 +284,7 @@ typedef struct batiment {
 nuee nueePrincipale;
 batiment batiments[NB_BAT];
 nuee grille[GRID_SIZE / 2][GRID_SIZE / 2];
+Vector3 positionsInitiales[NB_OISEAUX];
 int nbCellules = 0;
 bool cibleActivee = true;
 bool cibleAware[NB_OISEAUX];
@@ -691,6 +692,7 @@ int main(void) {
       vitesseSansChaos :
       randomVector3(-MAX_SPEED / 2.f, MAX_SPEED / 2.f);
     t[i] = o;
+    positionsInitiales[i] = o->pos;
   }
 
   nueePrincipale.oiseaux = t;
@@ -725,9 +727,7 @@ int main(void) {
   }
 
   bool pause = true;
-  bool showRayon = false;
   bool showVitesse = false;
-  bool showPolarisation = false;
   bool showNueesStats = false;
 
   Vector3 cible = randomCible();
@@ -745,7 +745,17 @@ int main(void) {
     UpdateCamera(&camera, CAMERA_FREE);
 
     if(IsKeyPressed(KEY_P)) pause = !pause;
-    if(IsKeyPressed(KEY_R)) showRayon = !showRayon;
+    if(IsKeyPressed(KEY_R) && SPAWN_CHAOS == 0) {
+      pause = true;
+      int i = GetRandomValue(0, NB_OISEAUX - 1);
+      while(cibleAware[i]) i = GetRandomValue(0, NB_OISEAUX - 1);
+      cibleAware[i] = true;
+      for(int i = 0; i < NB_OISEAUX; i++) {
+        nueePrincipale.oiseaux[i]->accel = Vector3Zero();
+        nueePrincipale.oiseaux[i]->velo = vitesseSansChaos;
+        nueePrincipale.oiseaux[i]->pos = positionsInitiales[i];
+      }
+    };
     if(IsKeyPressed(KEY_V)) showVitesse = !showVitesse;
     if(IsKeyPressed(KEY_C) && !IsKeyDown(KEY_LEFT_SHIFT)) cible = randomCible();
     if(IsKeyPressed(KEY_C) && IsKeyDown(KEY_LEFT_SHIFT)) cibleActivee = !cibleActivee;
@@ -755,7 +765,6 @@ int main(void) {
       pointFuiteActive = true;
     }
     if(IsKeyPressed(KEY_F) && IsKeyDown(KEY_LEFT_SHIFT)) pointFuiteActive = false;
-    if(IsKeyPressed(KEY_H)) showPolarisation = !showPolarisation;
     if(IsKeyPressed(KEY_N)) showNueesStats = !showNueesStats;
     if(IsKeyPressed(KEY_T)) shuffleCibleAware();
 
@@ -788,7 +797,6 @@ int main(void) {
 
         for (int i = 0; i < nueePrincipale.taille; i++) {
           DrawSphere(nueePrincipale.oiseaux[i]->pos, 0.125f, cibleAware[i] && cibleActivee ? LIME : DARKBLUE);
-          if(showRayon) DrawSphereWires(nueePrincipale.oiseaux[i]->pos, NEIGHBOR_RADIUS, 5, 5, MAROON);
           if(showVitesse) DrawLine3D(nueePrincipale.oiseaux[i]->pos, Vector3Add(nueePrincipale.oiseaux[i]->pos, Vector3Scale(nueePrincipale.oiseaux[i]->velo, 2.f)), RED);
         }
 
@@ -816,7 +824,6 @@ int main(void) {
       }EndMode3D();
 
       DrawFPS(1, 1);
-      if(showPolarisation) DrawText(TextFormat("Polarisation %f", polarisationLocaleMoyenne()), 1, 21, 20, BLACK);
     }EndDrawing();
   }
 
